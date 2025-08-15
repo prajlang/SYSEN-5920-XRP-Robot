@@ -1,163 +1,70 @@
-# XRP Line Following Algorithm - MicroPython
-# Simple two-sensor line following for curved lines
+# XRP PI Line Follower Algorithm (Proportional-Integral)
+# Using two sensors and arcade drive for robust control.
 
 from XRPLib.defaults import *
 import time
 
-# Configuration parameters
-LINE_THRESHOLD = 500    # Adjust based on your line/surface contrast
-STRAIGHT_SPEED = 50     # Speed when going straight (0-100)
-TURN_SPEED_FAST = 50    # Speed of faster wheel when turning
-TURN_SPEED_SLOW = 20    # Speed of slower wheel when turning
-LOOP_DELAY = 0.05       # Small delay between readings (seconds)
+# --- Configuration ---
+# Use these values to tune the robot's behavior.
+FWD_POWER = 0.4   # Constant forward power (0.0 to 1.0). Start around 0.3-0.4.
+TURN_CLAMP = 0.5  # Maximum turning effort (limits how sharp the robot can turn).
 
-def line_follow():
+# --- GAIN TUNING ---
+# These are starting points.
+KP = 0.9  # Proportional gain: The primary steering correction.
+KI = 0.03 # Integral gain: Corrects for long-term drift.
+
+def clamp(value, min_val, max_val):
+    """Helper function to limit a value to a specific range."""
+    return max(min_val, min(value, max_val))
+
+def pi_line_follower(duration=60):
     """
-    Main line following function using two IR sensors
+    Follows a line using a two-sensor PI algorithm and arcade drive.
     """
-    print("Starting line following...")
-    print("Press User button to stop")
+    print("Starting PI line follower... Press the user button to stop.")
+    integral = 0
     
+    # Wait for the user to be ready.
+    time.sleep(1)
+
     try:
-        while True:
-            # Check if user button is pressed to stop
-            if board.user_button.is_pressed():
-                print("User button pressed - stopping")
-                break
-            
-            # Read both IR sensors
-            left_sensor = reflectance.get_left()
-            right_sensor = reflectance.get_right()
-            
-            # Debug: Print sensor values (comment out for competition)
-            # print(f"Left: {left_sensor}, Right: {right_sensor}")
-            
-            # Line following logic
-            if left_sensor < LINE_THRESHOLD and right_sensor < LINE_THRESHOLD:
-                # Both sensors see the line - go straight
-                drivetrain.set_speed(STRAIGHT_SPEED, STRAIGHT_SPEED)
-                
-            elif left_sensor < LINE_THRESHOLD and right_sensor >= LINE_THRESHOLD:
-                # Left sensor sees line, right doesn't - turn left
-                # Slow down left wheel, keep right wheel fast
-                drivetrain.set_speed(TURN_SPEED_SLOW, TURN_SPEED_FAST)
-                
-            elif left_sensor >= LINE_THRESHOLD and right_sensor < LINE_THRESHOLD:
-                # Right sensor sees line, left doesn't - turn right  
-                # Slow down right wheel, keep left wheel fast
-                drivetrain.set_speed(TURN_SPEED_FAST, TURN_SPEED_SLOW)
-                
-            else:
-                # Neither sensor sees the line - stop and search
-                drivetrain.stop()
-                print("Line lost! Stopping...")
-                # Optional: Add search pattern here
-                time.sleep(0.5)  # Brief pause before continuing
-            
-            # Small delay to prevent overwhelming the system
-            time.sleep(LOOP_DELAY)
-            
-    except KeyboardInterrupt:
-        print("Program interrupted")
-    
-    finally:
-        # Always stop the robot when exiting
-        drivetrain.stop()
-        print("Line following stopped")
+        # The loop will run until the duration is over or the user button is pressed.
+        start_time = time.ticks_ms()
+        while not board.is_button_pressed() and time.ticks_diff(time.ticks_ms(), start_time) < duration * 1000:
+            # 1. Calculate Differential Error
+            left_val = reflectance.get_left()
+            right_val = reflectance.get_right()
+            error = left_val - right_val
 
-def calibrate_sensors():
-    """
-    Helper function to calibrate sensors and find good threshold
-    Run this first to understand your sensor readings
-    """
-    print("Sensor Calibration Mode")
-    print("Place robot over line and off line to see values")
-    print("Press User button to exit calibration")
-    
-    while not board.user_button.is_pressed():
-        left = reflectance.get_left()
-        right = reflectance.get_right()
-        print(f"Left: {left:4d}, Right: {right:4d}")
-        time.sleep(0.2)
-    
-    print("Calibration complete")
+            # 2. Calculate Integral Error
+            integral = integral + error
+            
+            # --- Anti-Windup for Integral ---
+            if error == 0 or (error > 0) != (integral > 0):
+                integral = 0
+            integral = clamp(integral, -100, 100) # Clamp the integral
 
-def enhanced_line_follow():
-    """
-    Enhanced version with lost line recovery
-    """
-    print("Starting enhanced line following...")
-    
-    # Variables for lost line recovery
-    last_direction = "straight"  # Track last known direction
-    search_count = 0
-    
-    try:
-        while True:
-            if board.user_button.is_pressed():
-                break
+            # 3. Calculate the Turn Command
+            turn_cmd = (KP * error) + (KI * integral)
             
-            left_sensor = reflectance.get_left()
-            right_sensor = reflectance.get_right()
-            
-            if left_sensor < LINE_THRESHOLD and right_sensor < LINE_THRESHOLD:
-                # Both sensors see line - go straight
-                drivetrain.set_speed(STRAIGHT_SPEED, STRAIGHT_SPEED)
-                last_direction = "straight"
-                search_count = 0
-                
-            elif left_sensor < LINE_THRESHOLD and right_sensor >= LINE_THRESHOLD:
-                # Turn left
-                drivetrain.set_speed(TURN_SPEED_SLOW, TURN_SPEED_FAST)
-                last_direction = "left"
-                search_count = 0
-                
-            elif left_sensor >= LINE_THRESHOLD and right_sensor < LINE_THRESHOLD:
-                # Turn right
-                drivetrain.set_speed(TURN_SPEED_FAST, TURN_SPEED_SLOW)
-                last_direction = "right"
-                search_count = 0
-                
-            else:
-                # Line lost - implement search pattern
-                search_count += 1
-                
-                if search_count < 10:  # Try continuing last direction briefly
-                    if last_direction == "left":
-                        drivetrain.set_speed(TURN_SPEED_SLOW, TURN_SPEED_FAST)
-                    elif last_direction == "right":
-                        drivetrain.set_speed(TURN_SPEED_FAST, TURN_SPEED_SLOW)
-                    else:
-                        drivetrain.set_speed(STRAIGHT_SPEED, STRAIGHT_SPEED)
-                else:
-                    # If still lost, stop
-                    drivetrain.stop()
-                    print("Line lost for too long - stopping")
-                    break
-            
-            time.sleep(LOOP_DELAY)
-            
+            # Clamp the turn command to prevent excessive turning
+            turn_cmd = clamp(turn_cmd, -TURN_CLAMP, TURN_CLAMP)
+
+            # 4. Drive the robot using arcade drive
+            drivetrain.arcade(FWD_POWER, turn_cmd)
+
+            # 5. Print Debug Telemetry
+            print(f"L:{left_val:.2f} R:{right_val:.2f} | err:{error:.2f} | turn:{turn_cmd:.2f}")
+
+            time.sleep(0.02) # Loop delay
+
     except KeyboardInterrupt:
-        print("Program interrupted")
-    
+        print("\nProgram stopped.")
     finally:
         drivetrain.stop()
-        print("Enhanced line following stopped")
+        print("Robot stopped.")
 
-# Main program
+# --- Main execution ---
 if __name__ == "__main__":
-    print("XRP Line Following Program")
-    print("1. Run calibrate_sensors() first to find good threshold")
-    print("2. Then run line_follow() for basic algorithm")
-    print("3. Or run enhanced_line_follow() for recovery features")
-    
-    # Uncomment one of these to run:
-    
-    # Step 1: Calibrate sensors first
-    # calibrate_sensors()
-    
-    # Step 2: Run basic line following
-    line_follow()
-    
-    # Alternative: Run enhanced version
-    # enhanced_line_follow()
+    pi_line_follower(duration=60)

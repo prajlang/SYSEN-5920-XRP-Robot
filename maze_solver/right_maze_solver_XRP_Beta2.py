@@ -1,65 +1,58 @@
-from XRPLib.defaults import *
-import time
+# ---------------------------------------------------------------
+# Maze Right-Hug PD
+# ---------------------------------------------------------------
+STOP_DIST_CM     = 18.0
+FWD_POWER_MAZE   = 0.4
+RIGHT_BIAS_TURN  = 0.03
+KP_MAZE          = 0.25
+KD_MAZE          = 0.4
+TURN_CLAMP_MAZE  = 3
+LOOP_DT_S_MAZE   = 0.02
+HISTORY_LEN      = 20
+SAME_TOL_CM      = 1
+BACKUP_TIME_S    = 0.35
+BACKUP_POWER     = -0.415
+NUDGE_TURN       = -0.28
+NUDGE_TIME_S     = 0.2
 
-# ----------- Tunables -----------
-STOP_DIST_CM     = 15.0    # desired minimum clearance ahead
-FWD_POWER        = 0.4    # forward throttle
-RIGHT_BIAS_TURN  = 0.03    # constant right bias (negative turn)
-KP               = 0.2   # proportional gain on distance error
-KD               = 0.15    # derivative gain (set to 0.0 to start P-only)
-TURN_CLAMP       = 3    # max magnitude of turn command
-LOOP_DT_S        = 0.02    # control loop period
-# --------------------------------
+def is_stuck(history):
+    return len(history) >= HISTORY_LEN and (max(history) - min(history)) <= SAME_TOL_CM
 
-def safe_distance_cm():
-    d = rangefinder.distance()
-    if d is None or d <= 0:
-        return 999.0
-    return float(d)
-
-def clamp(x, lo, hi):
-    return lo if x < lo else (hi if x > hi else x)
-
-def stop():
-    drivetrain.arcade(0.0, 0.0)
+def unstick():
+    drivetrain.arcade(BACKUP_POWER, 0.0)
+    if wait_with_stop_check(BACKUP_TIME_S): return True
+    drivetrain.arcade(0.0, NUDGE_TURN)
+    if wait_with_stop_check(NUDGE_TIME_S): return True
+    stop()
+    return False
 
 def maze_right_hug_pd():
-    print("Right-hug with P/PD front clearance. Press user button to stop.")
+    print("Maze Right-Hug PD started")
     stop()
-    time.sleep(0.2)
+    history, prev_e, prev_ms = [], 0.0, time.ticks_ms()
 
-    prev_e = 0.0
-    prev_ms = time.ticks_ms()
-
-    while not board.is_button_pressed():
+    while not should_stop():
         d = safe_distance_cm()
-        print("Distance: %.2f cm" % d)
+        history.append(d)
+        if len(history) > HISTORY_LEN: history.pop(0)
 
-        # Base: forward with a small right bias
+        if is_stuck(history):
+            if unstick(): break
+            history.clear()
+            prev_ms, prev_e = time.ticks_ms(), STOP_DIST_CM - d
+            continue
+
         turn_cmd = -RIGHT_BIAS_TURN
-
-        # If too close, add left correction proportional to how close you are
-        e = STOP_DIST_CM - d  # positive when too close
+        e = STOP_DIST_CM - d
         now_ms = time.ticks_ms()
         dt = max(1e-3, time.ticks_diff(now_ms, prev_ms) / 1000.0)
         de_dt = (e - prev_e) / dt
-
         if e > 0:
-            turn_cmd += KP * e + KD * de_dt
+            turn_cmd += KP_MAZE * e + KD_MAZE * de_dt
 
-        # Limit turn authority
-        turn_cmd = clamp(turn_cmd, -TURN_CLAMP, TURN_CLAMP)
-
-        # Drive
-        drivetrain.arcade(FWD_POWER, turn_cmd)
-
-        # Update history and pace
-        prev_e = e
-        prev_ms = now_ms
-        time.sleep(LOOP_DT_S)
-
+        turn_cmd = clamp(turn_cmd, -TURN_CLAMP_MAZE, TURN_CLAMP_MAZE)
+        drivetrain.arcade(FWD_POWER_MAZE, turn_cmd)
+        prev_e, prev_ms = e, now_ms
+        time.sleep(LOOP_DT_S_MAZE)
     stop()
-    print("Controller stopped.")
-
-# Run it
-maze_right_hug_pd()
+    print("Maze stopped")
